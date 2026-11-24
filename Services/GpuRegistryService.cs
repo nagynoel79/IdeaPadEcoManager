@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
 using IdeaPadEcoManager.Models;
@@ -109,42 +110,109 @@ namespace IdeaPadEcoManager.Services
             return new List<string>(idePaths);
         }
 
-        private static void ScanWildcards(HashSet<string> results, string rootDir, string pattern, int maxDepth, Func<string, bool>? filter = null)
+        public List<string> DetectInstalledBrowserAndMediaPaths()
         {
-            if (!Directory.Exists(rootDir)) return;
+            var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
 
-            try
+            // 1. Browsers
+            var candidateBrowserPaths = new[]
             {
-                ScanRecursive(results, rootDir, pattern, 0, maxDepth, filter);
+                // Chrome
+                Path.Combine(programFiles, @"Google\Chrome\Application\chrome.exe"),
+                Path.Combine(programFilesX86, @"Google\Chrome\Application\chrome.exe"),
+                Path.Combine(localAppData, @"Google\Chrome\Application\chrome.exe"),
+                // Brave
+                Path.Combine(programFiles, @"BraveSoftware\Brave-Browser\Application\brave.exe"),
+                Path.Combine(programFilesX86, @"BraveSoftware\Brave-Browser\Application\brave.exe"),
+                Path.Combine(localAppData, @"BraveSoftware\Brave-Browser\Application\brave.exe"),
+                // Edge
+                Path.Combine(programFilesX86, @"Microsoft\Edge\Application\msedge.exe"),
+                Path.Combine(programFiles, @"Microsoft\Edge\Application\msedge.exe"),
+                // Firefox
+                Path.Combine(programFiles, @"Mozilla Firefox\firefox.exe"),
+                Path.Combine(programFilesX86, @"Mozilla Firefox\firefox.exe"),
+                // Opera & Opera GX
+                Path.Combine(localAppData, @"Programs\Opera\launcher.exe"),
+                Path.Combine(localAppData, @"Programs\Opera GX\launcher.exe"),
+                Path.Combine(programFiles, @"Opera\launcher.exe"),
+                // Vivaldi
+                Path.Combine(localAppData, @"Vivaldi\Application\vivaldi.exe"),
+                Path.Combine(programFiles, @"Vivaldi\Application\vivaldi.exe")
+            };
+
+            foreach (var p in candidateBrowserPaths)
+            {
+                if (File.Exists(p)) paths.Add(p);
             }
-            catch { }
-        }
 
-        private static void ScanRecursive(HashSet<string> results, string currentDir, string pattern, int currentDepth, int maxDepth, Func<string, bool>? filter)
-        {
-            if (currentDepth > maxDepth) return;
+            // 2. Edge WebView2 runtimes (used by Electron apps, browsers, chat apps)
+            ScanWildcards(paths, Path.Combine(programFilesX86, "Microsoft"), "msedgewebview2.exe", 4);
+            ScanWildcards(paths, Path.Combine(programFiles, "Microsoft"), "msedgewebview2.exe", 4);
 
+            // 3. Media Players & Video Tools
+            var candidateMediaPaths = new[]
+            {
+                // VLC
+                Path.Combine(programFiles, @"VideoLAN\VLC\vlc.exe"),
+                Path.Combine(programFilesX86, @"VideoLAN\VLC\vlc.exe"),
+                // MPC-HC
+                Path.Combine(programFiles, @"MPC-HC\mpc-hc64.exe"),
+                Path.Combine(programFilesX86, @"MPC-HC\mpc-hc.exe"),
+                // Spotify
+                Path.Combine(appData, @"Spotify\Spotify.exe"),
+                // Windows Media Player
+                Path.Combine(programFiles, @"Windows Media Player\wmplayer.exe"),
+                Path.Combine(programFilesX86, @"Windows Media Player\wmplayer.exe"),
+                // PotPlayer
+                Path.Combine(programFiles, @"DAUM\PotPlayer\PotPlayer64.exe"),
+                Path.Combine(programFilesX86, @"DAUM\PotPlayer\PotPlayer.exe")
+            };
+
+            foreach (var p in candidateMediaPaths)
+            {
+                if (File.Exists(p)) paths.Add(p);
+            }
+
+            // 4. Running browser & media processes
             try
             {
-                foreach (var file in Directory.GetFiles(currentDir, pattern))
+                var targetProcNames = new[] { "chrome", "brave", "msedge", "firefox", "opera", "vivaldi", "msedgewebview2", "vlc", "mpc-hc64", "spotify", "wmplayer" };
+                foreach (var name in targetProcNames)
                 {
-                    if (filter == null || filter(file))
+                    foreach (var proc in Process.GetProcessesByName(name))
                     {
-                        results.Add(file);
+                        try
+                        {
+                            string? p = proc.MainModule?.FileName;
+                            if (!string.IsNullOrEmpty(p) && File.Exists(p))
+                            {
+                                paths.Add(p);
+                            }
+                        }
+                        catch { }
                     }
                 }
-
-                foreach (var subDir in Directory.GetDirectories(currentDir))
-                {
-                    ScanRecursive(results, subDir, pattern, currentDepth + 1, maxDepth, filter);
-                }
             }
             catch { }
+
+            return new List<string>(paths);
         }
 
-        public List<IdeGpuStatus> CheckIdePreferences()
+        public List<string> DetectAllNonGamingPaths()
         {
-            var detected = DetectInstalledIdePaths();
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in DetectInstalledIdePaths()) set.Add(p);
+            foreach (var p in DetectInstalledBrowserAndMediaPaths()) set.Add(p);
+            return set.ToList();
+        }
+
+        public List<IdeGpuStatus> CheckAllNonGamingPreferences()
+        {
+            var detected = DetectAllNonGamingPaths();
             var list = new List<IdeGpuStatus>();
 
             using var key = Registry.CurrentUser.OpenSubKey(RegistrySubKey, writable: false);
@@ -165,16 +233,36 @@ namespace IdeaPadEcoManager.Services
                     }
                 }
 
-                list.Add(new IdeGpuStatus(name, path, isConfigured, currentPref));
+                string cat = ClassifyPath(path);
+                list.Add(new IdeGpuStatus(name, path, isConfigured, currentPref, cat));
             }
 
             return list;
         }
 
-        public int PinAllIdesToIntegratedGpu()
+        public List<IdeGpuStatus> CheckIdePreferences()
+        {
+            return CheckAllNonGamingPreferences();
+        }
+
+        private static string ClassifyPath(string path)
+        {
+            string p = path.ToLowerInvariant();
+            if (p.Contains("chrome") || p.Contains("brave") || p.Contains("edge") || p.Contains("firefox") || p.Contains("opera") || p.Contains("vivaldi"))
+            {
+                return "Böngésző";
+            }
+            if (p.Contains("vlc") || p.Contains("mpc") || p.Contains("spotify") || p.Contains("player"))
+            {
+                return "Média";
+            }
+            return "IDE";
+        }
+
+        public int PinAllNonGamingToIntegratedGpu()
         {
             int configuredCount = 0;
-            var detected = DetectInstalledIdePaths();
+            var detected = DetectAllNonGamingPaths();
 
             try
             {
@@ -218,14 +306,84 @@ namespace IdeaPadEcoManager.Services
                     }
                 }
 
-                AppLogger.Info($"Pinned {configuredCount} IDE(s) to Intel iGPU in UserGpuPreferences.");
+                AppLogger.Info($"Pinned {configuredCount} applications (Browsers, Media, IDEs) to Intel iGPU.");
             }
             catch (Exception ex)
             {
-                AppLogger.Error("Error pinning IDEs to integrated GPU", ex);
+                AppLogger.Error("Error pinning applications to integrated GPU", ex);
             }
 
             return configuredCount;
+        }
+
+        public int PinAllIdesToIntegratedGpu()
+        {
+            return PinAllNonGamingToIntegratedGpu();
+        }
+
+        public List<DemandingAppInfo> GetConfiguredPerformanceAppsFromRegistry()
+        {
+            var list = new List<DemandingAppInfo>();
+            try
+            {
+                using var key = Registry.CurrentUser.OpenSubKey(RegistrySubKey, writable: false);
+                if (key != null)
+                {
+                    foreach (var name in key.GetValueNames())
+                    {
+                        if (name.Equals("DirectXUserGlobalSettings", StringComparison.OrdinalIgnoreCase) ||
+                            name.Equals("GraphicsFeaturesNotificationConfig", StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        string val = (key.GetValue(name) as string) ?? "";
+                        if (val.Contains("GpuPreference=2;"))
+                        {
+                            string fileName = Path.GetFileName(name);
+                            list.Add(new DemandingAppInfo(fileName, name, "Windows Graphics Registry (GpuPreference=2)"));
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Warn($"Failed to read UserGpuPreferences registry: {ex.Message}");
+            }
+            return list;
+        }
+
+        private static void ScanWildcards(HashSet<string> results, string rootDir, string pattern, int maxDepth, Func<string, bool>? filter = null)
+        {
+            if (!Directory.Exists(rootDir)) return;
+
+            try
+            {
+                ScanRecursive(results, rootDir, pattern, 0, maxDepth, filter);
+            }
+            catch { }
+        }
+
+        private static void ScanRecursive(HashSet<string> results, string currentDir, string pattern, int currentDepth, int maxDepth, Func<string, bool>? filter)
+        {
+            if (currentDepth > maxDepth) return;
+
+            try
+            {
+                foreach (var file in Directory.GetFiles(currentDir, pattern))
+                {
+                    if (filter == null || filter(file))
+                    {
+                        results.Add(file);
+                    }
+                }
+
+                foreach (var subDir in Directory.GetDirectories(currentDir))
+                {
+                    ScanRecursive(results, subDir, pattern, currentDepth + 1, maxDepth, filter);
+                }
+            }
+            catch { }
         }
     }
 }

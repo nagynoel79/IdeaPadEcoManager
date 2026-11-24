@@ -24,8 +24,10 @@ namespace IdeaPadEcoManager.Services
         public const string SettingBatLevelLow = "8183ba9a-e910-48da-8769-14ae6dc1170a";
 
         public const string EcoPlanName = "Coding Eco & Quiet";
+        public const string AcCoolPlanName = "IdeaPad AC Cool & Quiet";
 
         private string? _cachedEcoPlanGuid = null;
+        private string? _cachedAcCoolPlanGuid = null;
         private string? _cachedPerfPlanGuid = null;
 
         public string GetOrEnsureEcoPlan()
@@ -66,6 +68,44 @@ namespace IdeaPadEcoManager.Services
             return SchemeBalanced;
         }
 
+        public string GetOrEnsureAcCoolPlan()
+        {
+            if (!string.IsNullOrEmpty(_cachedAcCoolPlanGuid))
+            {
+                return _cachedAcCoolPlanGuid;
+            }
+
+            var schemes = ListSchemes();
+            foreach (var (guid, name, _) in schemes)
+            {
+                if (name.Contains(AcCoolPlanName, StringComparison.OrdinalIgnoreCase))
+                {
+                    _cachedAcCoolPlanGuid = guid;
+                    AppLogger.Info($"Found existing '{AcCoolPlanName}' power scheme: {guid}");
+                    ConfigureAcCoolSettings(guid);
+                    return guid;
+                }
+            }
+
+            // Create by duplicating Balanced
+            AppLogger.Info($"Creating new custom power scheme '{AcCoolPlanName}'...");
+            string duplicateOut = RunPowerCfg($"-duplicatescheme {SchemeBalanced}");
+            var match = Regex.Match(duplicateOut, @"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", RegexOptions.IgnoreCase);
+
+            if (match.Success)
+            {
+                string newGuid = match.Value;
+                RunPowerCfg($"-changename {newGuid} \"{AcCoolPlanName}\" \"Lenovo IdeaPad Cool & Quiet AC Profile (Browsing & Media)\"");
+                _cachedAcCoolPlanGuid = newGuid;
+                AppLogger.Info($"Successfully created '{AcCoolPlanName}' scheme: {newGuid}");
+                ConfigureAcCoolSettings(newGuid);
+                return newGuid;
+            }
+
+            AppLogger.Warn("Could not duplicate scheme, falling back to Balanced");
+            return SchemeBalanced;
+        }
+
         public string GetOrEnsurePerformancePlan()
         {
             if (!string.IsNullOrEmpty(_cachedPerfPlanGuid))
@@ -96,15 +136,10 @@ namespace IdeaPadEcoManager.Services
             try
             {
                 // DC (Battery) settings:
-                // 1. Max CPU throttle state: 80%
                 RunPowerCfg($"/setdcvalueindex {guid} {SubProcessor} {SettingProcThrottleMax} 80");
-                // 2. CPU Boost mode: 0 (Disabled)
                 RunPowerCfg($"/setdcvalueindex {guid} {SubProcessor} {SettingPerfBoostMode} 0");
-                // 3. PCIe ASPM: 2 (Maximum Power Savings)
                 RunPowerCfg($"/setdcvalueindex {guid} {SubPciExpress} {SettingAspm} 2");
-                // 4. Intel Graphics: 0 (Maximum Battery Life)
                 RunPowerCfg($"/setdcvalueindex {guid} {SubIntelGraphics} {SettingIntelGpuPower} 0");
-                // 5. Battery Saver trigger (100% on battery)
                 RunPowerCfg($"/setdcvalueindex {guid} {SubBattery} {SettingBatLevelLow} 100");
 
                 AppLogger.Info($"Configured '{EcoPlanName}' settings (CPU max 80%, Boost off, PCIe Max Savings, Intel GPU Max Battery).");
@@ -115,20 +150,39 @@ namespace IdeaPadEcoManager.Services
             }
         }
 
+        private void ConfigureAcCoolSettings(string guid)
+        {
+            try
+            {
+                // AC settings for Cool & Quiet:
+                // 1. Max CPU throttle state: 100% (full base performance)
+                RunPowerCfg($"/setacvalueindex {guid} {SubProcessor} {SettingProcThrottleMax} 100");
+                // 2. CPU Boost mode: 0 (Disabled) -> Keeps CPU at ~3.2 GHz without hot 4.5 GHz spikes!
+                RunPowerCfg($"/setacvalueindex {guid} {SubProcessor} {SettingPerfBoostMode} 0");
+                // 3. PCIe ASPM: 2 (Maximum Power Savings)
+                RunPowerCfg($"/setacvalueindex {guid} {SubPciExpress} {SettingAspm} 2");
+                // 4. Intel Graphics: 1 (Balanced)
+                RunPowerCfg($"/setacvalueindex {guid} {SubIntelGraphics} {SettingIntelGpuPower} 1");
+                // 5. Battery Saver normal (20%)
+                RunPowerCfg($"/setacvalueindex {guid} {SubBattery} {SettingBatLevelLow} 20");
+
+                AppLogger.Info($"Configured '{AcCoolPlanName}' settings (CPU max 100%, Boost OFF, PCIe Max Savings, Intel GPU Balanced).");
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("Error configuring AC Cool power settings", ex);
+            }
+        }
+
         private void ConfigurePerformanceSettings(string guid)
         {
             try
             {
-                // AC settings:
-                // 1. Max CPU throttle state: 100%
+                // AC settings for High Performance:
                 RunPowerCfg($"/setacvalueindex {guid} {SubProcessor} {SettingProcThrottleMax} 100");
-                // 2. CPU Boost mode: 2 (Aggressive)
-                RunPowerCfg($"/setacvalueindex {guid} {SubProcessor} {SettingPerfBoostMode} 2");
-                // 3. PCIe ASPM: 0 (Off)
-                RunPowerCfg($"/setacvalueindex {guid} {SubPciExpress} {SettingAspm} 0");
-                // 4. Intel Graphics: 2 (Maximum Performance)
-                RunPowerCfg($"/setacvalueindex {guid} {SubIntelGraphics} {SettingIntelGpuPower} 2");
-                // 5. Battery Saver normal (20%)
+                RunPowerCfg($"/setacvalueindex {guid} {SubProcessor} {SettingPerfBoostMode} 2"); // Aggressive
+                RunPowerCfg($"/setacvalueindex {guid} {SubPciExpress} {SettingAspm} 0"); // Off
+                RunPowerCfg($"/setacvalueindex {guid} {SubIntelGraphics} {SettingIntelGpuPower} 2"); // Max Perf
                 RunPowerCfg($"/setacvalueindex {guid} {SubBattery} {SettingBatLevelLow} 20");
 
                 AppLogger.Info($"Configured Full Performance settings (CPU max 100%, Boost Aggressive, PCIe Max Perf, Intel GPU Max Perf).");
@@ -151,6 +205,22 @@ namespace IdeaPadEcoManager.Services
             catch (Exception ex)
             {
                 AppLogger.Error("Failed to activate Battery Eco power plan", ex);
+                return false;
+            }
+        }
+
+        public bool ApplyAcCoolPlan()
+        {
+            try
+            {
+                string coolGuid = GetOrEnsureAcCoolPlan();
+                RunPowerCfg($"/setactive {coolGuid}");
+                AppLogger.Info($"Activated AC Cool & Quiet power plan ({coolGuid})");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("Failed to activate AC Cool power plan", ex);
                 return false;
             }
         }

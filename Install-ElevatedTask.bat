@@ -12,7 +12,7 @@ if not exist "%EXE_PATH%" (
 )
 
 echo [INFO] IdeaPadEcoManager regisztralasa a Feladatutemezoben (Legmagasabb jogosultsag)...
-schtasks /create /tn "IdeaPadEcoManager" /tr "\"%EXE_PATH%\"" /sc onlogon /rl highest /f
+schtasks /create /tn "IdeaPadEcoManager" /tr "\"%EXE_PATH%\" --minimized" /sc onlogon /rl highest /f
 
 if %ERRORLEVEL% EQU 0 (
     echo.

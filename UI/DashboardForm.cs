@@ -17,7 +17,7 @@ namespace IdeaPadEcoManager.UI
         private readonly IContainer _components;
         private readonly NotifyIcon _notifyIcon;
 
-        // UI Controls
+        // Header controls
         private Label _lblStatusHeader = null!;
         private Label _lblAdminBadge = null!;
         private Button _btnRestartAdmin = null!;
@@ -27,8 +27,10 @@ namespace IdeaPadEcoManager.UI
         private ProgressBar _pbBattery = null!;
         private Label _lblBatteryPercent = null!;
         private Label _lblCurrentProfile = null!;
+        private Label _lblWorkloadStatus = null!;
         private RadioButton _rbAuto = null!;
         private RadioButton _rbForceEco = null!;
+        private RadioButton _rbForceAcCool = null!;
         private RadioButton _rbForcePerf = null!;
 
         private Label _lblFanMode = null!;
@@ -40,9 +42,13 @@ namespace IdeaPadEcoManager.UI
         private Label _lblBrightnessVal = null!;
         private Label _lblActiveScheme = null!;
 
-        // GPU controls
-        private ListView _lvIdes = null!;
-        private Button _btnPinIdes = null!;
+        // GPU & Applications controls
+        private ListView _lvNonGamingApps = null!;
+        private Button _btnPinNonGaming = null!;
+        private ListView _lvTriggerApps = null!;
+        private TextBox _txtCustomApp = null!;
+        private Button _btnAddCustomApp = null!;
+        private Button _btnRemoveCustomApp = null!;
         private ListView _lvGpuProcs = null!;
         private Label _lblGpuStatus = null!;
         private Button _btnRefreshGpu = null!;
@@ -55,6 +61,7 @@ namespace IdeaPadEcoManager.UI
         private ToolStripMenuItem _menuStatusHeader = null!;
         private ToolStripMenuItem _menuAutoMode = null!;
         private ToolStripMenuItem _menuManualEco = null!;
+        private ToolStripMenuItem _menuManualAcCool = null!;
         private ToolStripMenuItem _menuManualPerf = null!;
         private ToolStripMenuItem _menuFanQuiet = null!;
         private ToolStripMenuItem _menuFanBalanced = null!;
@@ -70,13 +77,12 @@ namespace IdeaPadEcoManager.UI
             _startMinimized = startMinimized;
             _components = new Container();
 
-            // Set Form Icon to matching icon
+            // Form Icon
             Icon = IconHelper.CreateTrayIcon(_profileManager.CurrentActiveProfile);
 
             InitializeComponents();
             ApplyDarkTheme();
 
-            // Setup NotifyIcon with explicit Container and top-level Form attachment
             _notifyIcon = new NotifyIcon(_components)
             {
                 Icon = Icon,
@@ -90,7 +96,6 @@ namespace IdeaPadEcoManager.UI
             _notifyIcon.DoubleClick += (s, e) => ShowDashboard();
             _notifyIcon.BalloonTipClicked += (s, e) => ShowDashboard();
 
-            // Timer
             _uiRefreshTimer = new System.Windows.Forms.Timer { Interval = 3000 };
             _uiRefreshTimer.Tick += (s, e) =>
             {
@@ -100,18 +105,25 @@ namespace IdeaPadEcoManager.UI
                 }
             };
 
-            // Wire profile manager events
             _profileManager.ProfileApplied += (profile, reason) =>
             {
                 UpdateTrayVisuals();
 
-                string title = profile == AppPowerProfile.CodingEco
-                    ? "🌿 Coding Eco & Quiet Aktiválva"
-                    : "🚀 Full Performance Aktiválva";
+                string title = profile switch
+                {
+                    AppPowerProfile.CodingEco => "🌿 Coding Eco & Quiet Aktiválva",
+                    AppPowerProfile.AcCool => "❄️ AC Cool & Quiet Aktiválva",
+                    AppPowerProfile.FullPerformance => "🚀 Full Performance Aktiválva",
+                    _ => "Profil Frissítve"
+                };
 
-                string text = profile == AppPowerProfile.CodingEco
-                    ? "Akkumulátor: Csendes ventilátor, CPU 80%, Fényerő 45%, RTX 3050 felügyelet."
-                    : "Töltő csatlakoztatva: Maximális CPU/GPU teljesítmény, Lenovo Performance hűtés.";
+                string text = profile switch
+                {
+                    AppPowerProfile.CodingEco => "Akkumulátor: Csendes ventilátor, CPU 80%, Fényerő 45%, RTX 3050 felügyelet.",
+                    AppPowerProfile.AcCool => "Hálózatról: CPU Turbo Boost kikapcsolva, csendes ventilátor, hűvös működés filmhez és böngészéshez.",
+                    AppPowerProfile.FullPerformance => "Játék / 3D terhelés: Maximális CPU/GPU teljesítmény, Lenovo Performance hűtés.",
+                    _ => reason
+                };
 
                 try
                 {
@@ -163,90 +175,56 @@ namespace IdeaPadEcoManager.UI
             }
         }
 
-        protected override void OnVisibleChanged(EventArgs e)
-        {
-            base.OnVisibleChanged(e);
-            if (Visible)
-            {
-                ShowInTaskbar = true;
-                RefreshDashboardData();
-                _uiRefreshTimer.Start();
-            }
-            else
-            {
-                _uiRefreshTimer.Stop();
-            }
-        }
-
         private void BuildContextMenu()
         {
-            var menu = new ContextMenuStrip(_components);
+            var menu = new ContextMenuStrip();
 
-            var titleItem = new ToolStripMenuItem("Lenovo Eco & Performance Manager")
+            _menuStatusHeader = new ToolStripMenuItem("Állapot: Inicializálás...")
             {
-                Enabled = false,
-                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold)
-            };
-            menu.Items.Add(titleItem);
-
-            _menuStatusHeader = new ToolStripMenuItem("Állapot: Betöltés...")
-            {
-                Enabled = false,
-                Font = new Font("Segoe UI", 9f, FontStyle.Italic)
+                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+                Enabled = false
             };
             menu.Items.Add(_menuStatusHeader);
-
             menu.Items.Add(new ToolStripSeparator());
 
-            // Operation Mode submenu
-            var menuModes = new ToolStripMenuItem("⚙️ Működési Profil Mód");
-            _menuAutoMode = new ToolStripMenuItem("✓ Automatikus (Töltő követése)", null, (s, e) =>
+            // Modes
+            _menuAutoMode = new ToolStripMenuItem("Automatikus Vezérlés (Töltő + Igény)", null, (s, e) =>
             {
                 _profileManager.SetOperationMode(OperationMode.Auto);
                 UpdateTrayVisuals();
             });
-            _menuManualEco = new ToolStripMenuItem("Kényszerített Coding Eco (Akkus)", null, (s, e) =>
+            menu.Items.Add(_menuAutoMode);
+
+            _menuManualEco = new ToolStripMenuItem("Kényszerített Coding Eco (Akkus mód)", null, (s, e) =>
             {
                 _profileManager.SetOperationMode(OperationMode.ManualEco);
                 UpdateTrayVisuals();
             });
-            _menuManualPerf = new ToolStripMenuItem("Kényszerített Full Performance (Töltős)", null, (s, e) =>
+            menu.Items.Add(_menuManualEco);
+
+            _menuManualAcCool = new ToolStripMenuItem("Kényszerített AC Cool (Hűvös net/film)", null, (s, e) =>
+            {
+                _profileManager.SetOperationMode(OperationMode.ManualAcCool);
+                UpdateTrayVisuals();
+            });
+            menu.Items.Add(_menuManualAcCool);
+
+            _menuManualPerf = new ToolStripMenuItem("Kényszerített Full Performance (Játék)", null, (s, e) =>
             {
                 _profileManager.SetOperationMode(OperationMode.ManualPerformance);
                 UpdateTrayVisuals();
             });
-            menuModes.DropDownItems.AddRange(new ToolStripItem[] { _menuAutoMode, _menuManualEco, _menuManualPerf });
-            menu.Items.Add(menuModes);
-
-            // Lenovo Fan Mode submenu
-            var menuFan = new ToolStripMenuItem("🌀 Lenovo Hűtési Mód (EC)");
-            _menuFanQuiet = new ToolStripMenuItem("🔇 Csendes mód (Quiet - 1)", null, (s, e) =>
-            {
-                _profileManager.LenovoWmi.SetSmartFanMode(LenovoFanMode.Quiet);
-                UpdateTrayVisuals();
-            });
-            _menuFanBalanced = new ToolStripMenuItem("⚖ Kiegyensúlyozott mód (Balanced - 2)", null, (s, e) =>
-            {
-                _profileManager.LenovoWmi.SetSmartFanMode(LenovoFanMode.Balanced);
-                UpdateTrayVisuals();
-            });
-            _menuFanPerf = new ToolStripMenuItem("🚀 Teljesítmény mód (Performance - 3)", null, (s, e) =>
-            {
-                _profileManager.LenovoWmi.SetSmartFanMode(LenovoFanMode.Performance);
-                UpdateTrayVisuals();
-            });
-            menuFan.DropDownItems.AddRange(new ToolStripItem[] { _menuFanQuiet, _menuFanBalanced, _menuFanPerf });
-            menu.Items.Add(menuFan);
+            menu.Items.Add(_menuManualPerf);
 
             menu.Items.Add(new ToolStripSeparator());
 
-            // Pin IDEs
-            var menuPinIdes = new ToolStripMenuItem("🔧 IDE-k rögzítése Intel iGPU-ra", null, (s, e) =>
-            {
-                int count = _profileManager.GpuRegistry.PinAllIdesToIntegratedGpu();
-                _notifyIcon.ShowBalloonTip(2500, "IDE GPU Rögzítés", $"{count} fejlesztői környezet konfigurálva Intel iGPU-ra.", ToolTipIcon.Info);
-            });
-            menu.Items.Add(menuPinIdes);
+            // Fan menu
+            var menuFan = new ToolStripMenuItem("Lenovo Ventilátor Profil");
+            _menuFanQuiet = new ToolStripMenuItem("🔇 Csendes (Quiet - 1)", null, (s, e) => _profileManager.LenovoWmi.SetSmartFanMode(LenovoFanMode.Quiet));
+            _menuFanBalanced = new ToolStripMenuItem("⚖ Kiegyensúlyozott (Balanced - 2)", null, (s, e) => _profileManager.LenovoWmi.SetSmartFanMode(LenovoFanMode.Balanced));
+            _menuFanPerf = new ToolStripMenuItem("🚀 Teljesítmény (Performance - 3)", null, (s, e) => _profileManager.LenovoWmi.SetSmartFanMode(LenovoFanMode.Performance));
+            menuFan.DropDownItems.AddRange(new ToolStripItem[] { _menuFanQuiet, _menuFanBalanced, _menuFanPerf });
+            menu.Items.Add(menuFan);
 
             // GPU Status
             _menuGpuStatus = new ToolStripMenuItem("🎮 RTX 3050: Ellenőrzés...", null, (s, e) => ShowDashboard());
@@ -306,8 +284,15 @@ namespace IdeaPadEcoManager.UI
                 _notifyIcon.Icon = newIcon;
 
                 // Update Tooltip
-                string profileName = profile == AppPowerProfile.CodingEco ? "Coding Eco" : "Full Perf";
-                string pwr = isAc ? $"AC (100%)" : $"Bat ({percent}%)";
+                string profileName = profile switch
+                {
+                    AppPowerProfile.CodingEco => "Coding Eco",
+                    AppPowerProfile.AcCool => "AC Cool & Quiet",
+                    AppPowerProfile.FullPerformance => "Full Performance",
+                    _ => "Auto"
+                };
+
+                string pwr = isAc ? $"AC" : $"Bat ({percent}%)";
                 _notifyIcon.Text = $"Lenovo Eco Manager\n{pwr} - {profileName}";
 
                 // Update Menu Checkmarks
@@ -315,6 +300,7 @@ namespace IdeaPadEcoManager.UI
 
                 _menuAutoMode.Checked = _profileManager.CurrentOperationMode == OperationMode.Auto;
                 _menuManualEco.Checked = _profileManager.CurrentOperationMode == OperationMode.ManualEco;
+                _menuManualAcCool.Checked = _profileManager.CurrentOperationMode == OperationMode.ManualAcCool;
                 _menuManualPerf.Checked = _profileManager.CurrentOperationMode == OperationMode.ManualPerformance;
 
                 // Check dGPU status
@@ -348,13 +334,14 @@ namespace IdeaPadEcoManager.UI
             BringToFront();
             Activate();
             RefreshDashboardData();
+            _uiRefreshTimer.Start();
         }
 
         private void InitializeComponents()
         {
-            Text = "Lenovo IdeaPad Gaming 3 - Eco & Performance Manager";
-            Size = new Size(860, 680);
-            MinimumSize = new Size(800, 600);
+            Text = "Lenovo IdeaPad Gaming 3 - Eco & Smart Performance Manager";
+            Size = new Size(890, 720);
+            MinimumSize = new Size(840, 650);
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.Sizable;
 
@@ -376,7 +363,7 @@ namespace IdeaPadEcoManager.UI
 
             var lblSub = new Label
             {
-                Text = "Intel Core i5-11320H | NVIDIA GeForce RTX 3050 4GB | 60Hz Display",
+                Text = "Intel Core i5-11320H | NVIDIA GeForce RTX 3050 4GB | Intelligens Igényvezérelt Hűtés",
                 Font = new Font("Segoe UI", 9.5f),
                 ForeColor = Color.Gray,
                 AutoSize = true,
@@ -413,7 +400,7 @@ namespace IdeaPadEcoManager.UI
             };
 
             var tabOverview = new TabPage("⚡ Áttekintés & Profilok");
-            var tabGpu = new TabPage("🎮 GPU & IDE Felügyelet");
+            var tabGpu = new TabPage("🎮 GPU & Alkalmazás Felügyelet");
             var tabLogs = new TabPage("📜 Napló & Beállítások");
 
             BuildOverviewTab(tabOverview);
@@ -441,8 +428,8 @@ namespace IdeaPadEcoManager.UI
             var grpPower = new GroupBox
             {
                 Text = "Áramellátás és Működési Profil",
-                Width = 790,
-                Height = 130,
+                Width = 820,
+                Height = 160,
                 Font = new Font("Segoe UI", 10, FontStyle.Bold)
             };
 
@@ -450,13 +437,13 @@ namespace IdeaPadEcoManager.UI
             {
                 Text = "Tápforrás: Ellenőrzés...",
                 Font = new Font("Segoe UI", 11),
-                Location = new Point(20, 30),
+                Location = new Point(20, 28),
                 AutoSize = true
             };
 
             _pbBattery = new ProgressBar
             {
-                Location = new Point(20, 60),
+                Location = new Point(20, 56),
                 Size = new Size(280, 22),
                 Style = ProgressBarStyle.Continuous
             };
@@ -465,7 +452,7 @@ namespace IdeaPadEcoManager.UI
             {
                 Text = "0%",
                 Font = new Font("Segoe UI", 10),
-                Location = new Point(310, 62),
+                Location = new Point(310, 58),
                 AutoSize = true
             };
 
@@ -473,14 +460,23 @@ namespace IdeaPadEcoManager.UI
             {
                 Text = "Aktív Profil: ...",
                 Font = new Font("Segoe UI", 11, FontStyle.Bold),
-                Location = new Point(20, 92),
+                Location = new Point(20, 88),
+                AutoSize = true
+            };
+
+            _lblWorkloadStatus = new Label
+            {
+                Text = "Játék / 3D Igény: Lekérdezés...",
+                Font = new Font("Segoe UI", 9.5f),
+                ForeColor = Color.LightSkyBlue,
+                Location = new Point(20, 118),
                 AutoSize = true
             };
 
             _rbAuto = new RadioButton
             {
-                Text = "Automatikus (Töltő követése)",
-                Location = new Point(460, 28),
+                Text = "Automatikus (Töltő + Igény követése)",
+                Location = new Point(460, 24),
                 AutoSize = true,
                 Checked = _profileManager.CurrentOperationMode == OperationMode.Auto,
                 Font = new Font("Segoe UI", 9.5f)
@@ -490,30 +486,40 @@ namespace IdeaPadEcoManager.UI
             _rbForceEco = new RadioButton
             {
                 Text = "Kényszerített Coding Eco (Akkus)",
-                Location = new Point(460, 58),
+                Location = new Point(460, 52),
                 AutoSize = true,
                 Checked = _profileManager.CurrentOperationMode == OperationMode.ManualEco,
                 Font = new Font("Segoe UI", 9.5f)
             };
             _rbForceEco.CheckedChanged += (s, e) => { if (_rbForceEco.Checked) _profileManager.SetOperationMode(OperationMode.ManualEco); RefreshDashboardData(); };
 
+            _rbForceAcCool = new RadioButton
+            {
+                Text = "Kényszerített AC Cool (Hűvös net/film)",
+                Location = new Point(460, 80),
+                AutoSize = true,
+                Checked = _profileManager.CurrentOperationMode == OperationMode.ManualAcCool,
+                Font = new Font("Segoe UI", 9.5f)
+            };
+            _rbForceAcCool.CheckedChanged += (s, e) => { if (_rbForceAcCool.Checked) _profileManager.SetOperationMode(OperationMode.ManualAcCool); RefreshDashboardData(); };
+
             _rbForcePerf = new RadioButton
             {
-                Text = "Kényszerített Full Performance (Töltős)",
-                Location = new Point(460, 88),
+                Text = "Kényszerített Full Performance (Játék)",
+                Location = new Point(460, 108),
                 AutoSize = true,
                 Checked = _profileManager.CurrentOperationMode == OperationMode.ManualPerformance,
                 Font = new Font("Segoe UI", 9.5f)
             };
             _rbForcePerf.CheckedChanged += (s, e) => { if (_rbForcePerf.Checked) _profileManager.SetOperationMode(OperationMode.ManualPerformance); RefreshDashboardData(); };
 
-            grpPower.Controls.AddRange(new Control[] { _lblPowerSource, _pbBattery, _lblBatteryPercent, _lblCurrentProfile, _rbAuto, _rbForceEco, _rbForcePerf });
+            grpPower.Controls.AddRange(new Control[] { _lblPowerSource, _pbBattery, _lblBatteryPercent, _lblCurrentProfile, _lblWorkloadStatus, _rbAuto, _rbForceEco, _rbForceAcCool, _rbForcePerf });
 
             // 2. Lenovo Cooling Box
             var grpCooling = new GroupBox
             {
                 Text = "Lenovo Vantage / EC Hűtési Profil (Smart Fan)",
-                Width = 790,
+                Width = 820,
                 Height = 110,
                 Font = new Font("Segoe UI", 10, FontStyle.Bold)
             };
@@ -562,7 +568,7 @@ namespace IdeaPadEcoManager.UI
             var grpPlan = new GroupBox
             {
                 Text = "Kijelző Fényerő & Windows Energiagazdálkodás",
-                Width = 790,
+                Width = 820,
                 Height = 150,
                 Font = new Font("Segoe UI", 10, FontStyle.Bold)
             };
@@ -606,7 +612,7 @@ namespace IdeaPadEcoManager.UI
 
             var lblTuningInfo = new Label
             {
-                Text = "• Coding Eco: CPU max 80% | Turbo Boost: KI | PCIe: Max Savings | Intel GPU: Max Battery\n• Full Performance: CPU 100% | Turbo Boost: BE (Aggressive) | PCIe: KI | Intel GPU: Max Perf",
+                Text = "• Coding Eco: CPU max 80% | Turbo Boost: KI | Fényerő 45%\n• AC Cool & Quiet: CPU 100% | Turbo Boost: KI (3.2 GHz hűvös) | Hangtalan film & netezés\n• Full Performance: CPU 100% | Turbo Boost: BE (4.5 GHz) | Csak játék / 3D futásakor",
                 Font = new Font("Segoe UI", 8.5f),
                 ForeColor = Color.DarkGray,
                 Location = new Point(20, 105),
@@ -630,51 +636,131 @@ namespace IdeaPadEcoManager.UI
                 Padding = new Padding(15)
             };
 
-            // 1. IDEs Box
-            var grpIdes = new GroupBox
+            // 1. Non-Gaming Apps Box (Browsers, Media, IDEs)
+            var grpNonGaming = new GroupBox
             {
-                Text = "Fejlesztői Környezetek (IDE) Integrált GPU-hoz Rögzítése",
-                Width = 790,
+                Text = "Intel Integrált GPU-hoz Rögzített Alkalmazások (Böngészők, Média, IDE-k)",
+                Width = 820,
                 Height = 220,
                 Font = new Font("Segoe UI", 10, FontStyle.Bold)
             };
 
-            _lvIdes = new ListView
+            _lvNonGamingApps = new ListView
             {
-                Location = new Point(15, 30),
-                Size = new Size(760, 135),
+                Location = new Point(15, 28),
+                Size = new Size(790, 140),
                 View = View.Details,
                 FullRowSelect = true,
                 Font = new Font("Segoe UI", 9)
             };
-            _lvIdes.Columns.Add("IDE Név", 140);
-            _lvIdes.Columns.Add("Állapot", 170);
-            _lvIdes.Columns.Add("Fájl Elérési Út", 420);
+            _lvNonGamingApps.Columns.Add("Alkalmazás", 150);
+            _lvNonGamingApps.Columns.Add("Kategória", 90);
+            _lvNonGamingApps.Columns.Add("GPU Állapot", 160);
+            _lvNonGamingApps.Columns.Add("Fájl Elérési Út", 370);
 
-            _btnPinIdes = new Button
+            _btnPinNonGaming = new Button
             {
-                Text = "🔧 Minden IDE Rögzítése Intel iGPU-ra (HKCU DirectX Beállítás)",
+                Text = "🔧 Minden Böngésző, Média és IDE Rögzítése Intel iGPU-ra (GpuPreference=1;)",
                 Location = new Point(15, 175),
-                Size = new Size(420, 32),
+                Size = new Size(520, 32),
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
                 Cursor = Cursors.Hand
             };
-            _btnPinIdes.Click += (s, e) =>
+            _btnPinNonGaming.Click += (s, e) =>
             {
-                int c = _profileManager.GpuRegistry.PinAllIdesToIntegratedGpu();
-                MessageBox.Show($"{c} fejlesztői környezet sikeresen rögzítve az Intel integrált GPU-ra (GpuPreference=1;).",
-                    "IDE GPU Rögzítés", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                RefreshDashboardData();
+                int c = _profileManager.GpuRegistry.PinAllNonGamingToIntegratedGpu();
+                MessageBox.Show($"{c} alkalmazás (Böngészők, Média, IDE-k) sikeresen rögzítve az Intel integrált GPU-ra.\nA böngészők és videók nem ébresztik fel az RTX 3050-et!",
+                    "iGPU Rögzítés Kész", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                RefreshNonGamingList();
             };
 
-            grpIdes.Controls.AddRange(new Control[] { _lvIdes, _btnPinIdes });
+            grpNonGaming.Controls.AddRange(new Control[] { _lvNonGamingApps, _btnPinNonGaming });
 
-            // 2. RTX 3050 Oversight Box
+            // 2. Performance Mode Triggers Box (Games, 3D apps)
+            var grpTriggers = new GroupBox
+            {
+                Text = "Performance Mode-ot Aktiváló Alkalmazások (Játékok & 3D szoftverek)",
+                Width = 820,
+                Height = 200,
+                Font = new Font("Segoe UI", 10, FontStyle.Bold)
+            };
+
+            _lvTriggerApps = new ListView
+            {
+                Location = new Point(15, 28),
+                Size = new Size(790, 120),
+                View = View.Details,
+                FullRowSelect = true,
+                Font = new Font("Segoe UI", 9)
+            };
+            _lvTriggerApps.Columns.Add("Fájlnév", 160);
+            _lvTriggerApps.Columns.Add("Forrás / Típus", 230);
+            _lvTriggerApps.Columns.Add("Elérési Út", 380);
+
+            var pnlAddCustom = new Panel
+            {
+                Location = new Point(15, 155),
+                Size = new Size(790, 35)
+            };
+
+            var lblCustomPrompt = new Label
+            {
+                Text = "Egyéni exe hozzáadása:",
+                Location = new Point(0, 7),
+                AutoSize = true,
+                Font = new Font("Segoe UI", 9)
+            };
+
+            _txtCustomApp = new TextBox
+            {
+                Location = new Point(150, 4),
+                Size = new Size(200, 26),
+                Font = new Font("Segoe UI", 9)
+            };
+
+            _btnAddCustomApp = new Button
+            {
+                Text = "➕ Hozzáadás",
+                Location = new Point(360, 2),
+                Size = new Size(110, 28),
+                Font = new Font("Segoe UI", 9)
+            };
+            _btnAddCustomApp.Click += (s, e) =>
+            {
+                if (!string.IsNullOrWhiteSpace(_txtCustomApp.Text))
+                {
+                    _profileManager.PerformanceApps.AddCustomApp(_txtCustomApp.Text.Trim());
+                    _txtCustomApp.Clear();
+                    RefreshTriggerAppList();
+                }
+            };
+
+            _btnRemoveCustomApp = new Button
+            {
+                Text = "🗑 Kiválasztott törlése",
+                Location = new Point(480, 2),
+                Size = new Size(150, 28),
+                Font = new Font("Segoe UI", 9)
+            };
+            _btnRemoveCustomApp.Click += (s, e) =>
+            {
+                if (_lvTriggerApps.SelectedItems.Count > 0)
+                {
+                    string name = _lvTriggerApps.SelectedItems[0].Text;
+                    _profileManager.PerformanceApps.RemoveCustomApp(name);
+                    RefreshTriggerAppList();
+                }
+            };
+
+            pnlAddCustom.Controls.AddRange(new Control[] { lblCustomPrompt, _txtCustomApp, _btnAddCustomApp, _btnRemoveCustomApp });
+            grpTriggers.Controls.AddRange(new Control[] { _lvTriggerApps, pnlAddCustom });
+
+            // 3. RTX 3050 Live Box
             var grpGpu = new GroupBox
             {
-                Text = "NVIDIA GeForce RTX 3050 Valós Idejű Felügyelet",
-                Width = 790,
-                Height = 230,
+                Text = "NVIDIA GeForce RTX 3050 Valós Idejű Folyamatok",
+                Width = 820,
+                Height = 190,
                 Font = new Font("Segoe UI", 10, FontStyle.Bold)
             };
 
@@ -682,35 +768,35 @@ namespace IdeaPadEcoManager.UI
             {
                 Text = "RTX 3050 Állapot: Lekérdezés...",
                 Font = new Font("Segoe UI", 10.5f),
-                Location = new Point(15, 30),
+                Location = new Point(15, 26),
                 AutoSize = true
             };
 
             _btnRefreshGpu = new Button
             {
                 Text = "🔄 Frissítés",
-                Location = new Point(660, 24),
-                Size = new Size(115, 30),
+                Location = new Point(690, 20),
+                Size = new Size(115, 28),
                 Font = new Font("Segoe UI", 9)
             };
             _btnRefreshGpu.Click += (s, e) => RefreshGpuProcesses();
 
             _lvGpuProcs = new ListView
             {
-                Location = new Point(15, 65),
-                Size = new Size(760, 150),
+                Location = new Point(15, 55),
+                Size = new Size(790, 120),
                 View = View.Details,
                 FullRowSelect = true,
                 Font = new Font("Segoe UI", 9)
             };
-            _lvGpuProcs.Columns.Add("PID", 80);
-            _lvGpuProcs.Columns.Add("Folyamat Név", 200);
-            _lvGpuProcs.Columns.Add("GPU Memória", 120);
-            _lvGpuProcs.Columns.Add("Elérési Út", 330);
+            _lvGpuProcs.Columns.Add("PID", 70);
+            _lvGpuProcs.Columns.Add("Folyamat Név", 180);
+            _lvGpuProcs.Columns.Add("GPU Memória", 110);
+            _lvGpuProcs.Columns.Add("Elérési Út", 410);
 
             grpGpu.Controls.AddRange(new Control[] { _lblGpuStatus, _btnRefreshGpu, _lvGpuProcs });
 
-            pnl.Controls.AddRange(new Control[] { grpIdes, grpGpu });
+            pnl.Controls.AddRange(new Control[] { grpNonGaming, grpTriggers, grpGpu });
             tab.Controls.Add(pnl);
         }
 
@@ -804,7 +890,6 @@ namespace IdeaPadEcoManager.UI
 
             tab.Controls.Add(pnl);
 
-            // Populate existing logs
             foreach (var log in AppLogger.GetRecentLogs())
             {
                 AppendLogMessage(log);
@@ -826,6 +911,12 @@ namespace IdeaPadEcoManager.UI
                         btn.BackColor = Color.FromArgb(50, 52, 56);
                         btn.ForeColor = Color.WhiteSmoke;
                         btn.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 80);
+                    }
+                    else if (c is TextBox tb)
+                    {
+                        tb.BackColor = Color.FromArgb(24, 25, 27);
+                        tb.ForeColor = Color.WhiteSmoke;
+                        tb.BorderStyle = BorderStyle.FixedSingle;
                     }
                     else if (c is GroupBox grp)
                     {
@@ -876,12 +967,33 @@ namespace IdeaPadEcoManager.UI
                 _pbBattery.Value = Math.Clamp(percent, 0, 100);
                 _lblBatteryPercent.Text = $"{percent}%";
 
-                _lblCurrentProfile.Text = _profileManager.CurrentActiveProfile == AppPowerProfile.CodingEco
-                    ? "Aktív Profil: 🌿 Coding Eco & Quiet"
-                    : "Aktív Profil: 🚀 Full Performance";
-                _lblCurrentProfile.ForeColor = _profileManager.CurrentActiveProfile == AppPowerProfile.CodingEco
-                    ? Color.LightGreen
-                    : Color.Salmon;
+                _lblCurrentProfile.Text = _profileManager.CurrentActiveProfile switch
+                {
+                    AppPowerProfile.CodingEco => "Aktív Profil: 🌿 Coding Eco & Quiet (Akkus üzem)",
+                    AppPowerProfile.AcCool => "Aktív Profil: ❄️ AC Cool & Quiet (Hűvös & Csendes filmhez/nethez)",
+                    AppPowerProfile.FullPerformance => "Aktív Profil: 🚀 Full Performance (Játék / 3D terhelés aktív)",
+                    _ => "Aktív Profil: Ismeretlen"
+                };
+
+                _lblCurrentProfile.ForeColor = _profileManager.CurrentActiveProfile switch
+                {
+                    AppPowerProfile.CodingEco => Color.LightGreen,
+                    AppPowerProfile.AcCool => Color.LightSkyBlue,
+                    AppPowerProfile.FullPerformance => Color.Salmon,
+                    _ => Color.WhiteSmoke
+                };
+
+                // Workload status
+                if (!string.IsNullOrEmpty(_profileManager.CurrentDemandingAppName))
+                {
+                    _lblWorkloadStatus.Text = $"Játék / 3D Igény: 🎮 {_profileManager.CurrentDemandingAppName} ({_profileManager.CurrentDemandingReason})";
+                    _lblWorkloadStatus.ForeColor = Color.Salmon;
+                }
+                else
+                {
+                    _lblWorkloadStatus.Text = "Játék / 3D Igény: 💤 Nincs nagy igényű alkalmazás -> Alacsony hőmérséklet (Boost KI)";
+                    _lblWorkloadStatus.ForeColor = Color.LightSkyBlue;
+                }
 
                 // 2. Lenovo WMI Mode
                 var fanResult = _profileManager.LenovoWmi.GetSmartFanMode();
@@ -914,8 +1026,9 @@ namespace IdeaPadEcoManager.UI
                 var activeScheme = _profileManager.PowerPlan.GetActiveScheme();
                 _lblActiveScheme.Text = $"Windows Energiagazdálkodási séma: {activeScheme.Name} ({activeScheme.Guid})";
 
-                // 5. IDEs
-                RefreshIdeList();
+                // 5. Non-gaming and triggers
+                RefreshNonGamingList();
+                RefreshTriggerAppList();
 
                 // 6. GPU
                 RefreshGpuProcesses();
@@ -926,19 +1039,36 @@ namespace IdeaPadEcoManager.UI
             }
         }
 
-        private void RefreshIdeList()
+        private void RefreshNonGamingList()
         {
             if (!IsHandleCreated || IsDisposed) return;
-            var ides = _profileManager.GpuRegistry.CheckIdePreferences();
-            _lvIdes.Items.Clear();
+            var apps = _profileManager.GpuRegistry.CheckAllNonGamingPreferences();
+            _lvNonGamingApps.Items.Clear();
 
-            foreach (var ide in ides)
+            foreach (var app in apps)
             {
-                var item = new ListViewItem(ide.Name);
-                item.SubItems.Add(ide.IsConfigured ? "✓ Intel iGPU (GpuPref=1)" : "⚠ Nincs beállítva");
-                item.SubItems.Add(ide.Path);
-                item.ForeColor = ide.IsConfigured ? Color.LightGreen : Color.Orange;
-                _lvIdes.Items.Add(item);
+                var item = new ListViewItem(app.Name);
+                item.SubItems.Add(app.Category);
+                item.SubItems.Add(app.IsConfigured ? "✓ Intel iGPU (GpuPref=1)" : "⚠ Nincs beállítva");
+                item.SubItems.Add(app.Path);
+                item.ForeColor = app.IsConfigured ? Color.LightGreen : Color.Orange;
+                _lvNonGamingApps.Items.Add(item);
+            }
+        }
+
+        private void RefreshTriggerAppList()
+        {
+            if (!IsHandleCreated || IsDisposed) return;
+            var triggers = _profileManager.PerformanceApps.GetAllTriggerApps();
+            _lvTriggerApps.Items.Clear();
+
+            foreach (var t in triggers)
+            {
+                var item = new ListViewItem(t.Name);
+                item.SubItems.Add(t.Source);
+                item.SubItems.Add(t.Path);
+                item.ForeColor = Color.LightSkyBlue;
+                _lvTriggerApps.Items.Add(item);
             }
         }
 
@@ -955,7 +1085,7 @@ namespace IdeaPadEcoManager.UI
             }
             else
             {
-                _lblGpuStatus.Text = $"RTX 3050 Állapot: ⚡ Aktív ({procs.Count} folyamat használja a dGPU-t!)";
+                _lblGpuStatus.Text = $"RTX 3050 Állapot: ⚡ Aktív ({procs.Count} folyamat fut a dGPU-n)";
                 _lblGpuStatus.ForeColor = Color.Salmon;
 
                 foreach (var p in procs)
